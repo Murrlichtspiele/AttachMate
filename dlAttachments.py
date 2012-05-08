@@ -1,5 +1,6 @@
 # Something in lines of http://stackoverflow.com/questions/348630/how-can-i-download-all-emails-with-attachments-from-gmail
 # Make sure you have IMAP enabled in your gmail settings.
+# Right now it won't download same file name twice even if their contents are different.
 
 import email
 import getpass, imaplib

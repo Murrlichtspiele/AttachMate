@@ -1,32 +1,50 @@
-# Something in lines of http://stackoverflow.com/questions/348630/how-can-i-download-all-emails-with-attachments-from-gmail
-# Make sure you have IMAP enabled in your gmail settings.
-# Right now it won't download same file name twice even if their contents are different.
+# Use case: Download KDMs from mail account and manage the ingest of them.
+# Needed: 
+# - Download mail payload to folder.
+# - Unpack ZIP files.
+# - Wake up Doremi and projector and start the ingest
+# - Make Doremi check for new movies to ingest
+# - Send info mail with ingested kdms and started DCP ingests.
 
 import email
 import getpass, imaplib
 import os
 import sys
 
+# Create the output directory:
 detach_dir = '.'
 if 'attachments' not in os.listdir(detach_dir):
     os.mkdir('attachments')
 
-userName = raw_input('Enter your GMail username:')
-passwd = getpass.getpass('Enter your password: ')
+imapServer = 'imap.strato.de'
+userName = 'kdm@murrlichtspiele.de'
+passwd = getpass.getpass('Enter password for ' + userName + ' at ' + imapServer + ': ')
+
+subfolder = 'Inbox'
 
 try:
-    imapSession = imaplib.IMAP4_SSL('imap.gmail.com')
+    imapSession = imaplib.IMAP4_SSL(imapServer)
     typ, accountDetails = imapSession.login(userName, passwd)
     if typ != 'OK':
         print 'Not able to sign in!'
         raise
+    else:
+        print 'Sucessfully logged in!'
     
-    imapSession.select('[Gmail]/All Mail')
+except:
+    print 'Not able to connect to server ' + imapServer + ' with username '+ userName
+
+    
+try:    
+    imapSession.select(subfolder)
     typ, data = imapSession.search(None, 'ALL')
     if typ != 'OK':
         print 'Error searching Inbox.'
         raise
-    
+except :
+    print 'Not able to dive into subfolder.'
+
+try:    
     # Iterating over all emails
     for msgId in data[0].split():
         typ, messageParts = imapSession.fetch(msgId, '(RFC822)')
@@ -44,7 +62,14 @@ try:
                 # print part.as_string()
                 continue
             fileName = part.get_filename()
-
+            print fileName
+            if fileName.endswith('.zip'):
+                print 'Found ZIP file. Unpacking will happen later.'
+            elif fileName.endswith('.xml'):
+                print 'Found XML file.'
+            else:
+                print 'Omitting filetype.'
+                continue
             if bool(fileName):
                 filePath = os.path.join(detach_dir, 'attachments', fileName)
                 if not os.path.isfile(filePath) :

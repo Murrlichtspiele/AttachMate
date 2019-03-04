@@ -1,14 +1,8 @@
 #!/usr/bin/python
-# Use case: Download KDMs from mail account and manage the ingest of them.
-# Needed:
-# - Download mail payload to folder.
-# - Unpack ZIP files.
-# - Wake up Doremi and projector and start the ingest
-# - Make Doremi check for new movies to ingest
-# - Send info mail with ingested kdms and started DCP ingests.
 
 import email
-import getpass, imaplib
+import getpass
+import imaplib, smtplib
 import os, zipfile
 import sys, re
 from ftplib import FTP
@@ -18,16 +12,63 @@ import pyping
 from wakeonlan import send_magic_packet
 import xml.etree.ElementTree as ET
 import time 
+import socket
+import binascii
 
-imapServer = 'imap.some.server'
-userName = 'example@some.server'
+def run_command(command):
+    # Running Barco Marcos via socket messaged
+    
+    host = '192.168.1.133'
+    port = 43728
+
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.connect((host, port))
+    except:
+        print 'Error connecting to socket'
+    if command == 'wakeup':
+        message = '\xfe\x00\x65\x65\xff' # Wake up projector
+    elif command == 'sleep':
+        message = '\xfe\x00\x66\x66\xff' # put to sleep projector
+    elif command == 'status':
+        message = '\xfe\x00\x67\x01\x68\xff' # put to sleep projecto
+    print('Sending command')
+    try:
+       s.send(message)
+    except:
+        print 'Error sending message'
+
+
+    result = s.recv(256)
+    
+    if result == '\xfe\x00\x00\x06\x06\xff':
+        print 'Success'
+    else:
+        print 'Projector rejected command'
+        return False
+    
+    if command == 'wakeup':
+        return True
+    elif command == 'sleep':
+        return True
+    elif command == 'status':
+        data = s.recv(256)
+        s.close()
+        if data[3] == '\x00':
+            return False
+        elif data[3] == '\x01':
+            return True
+            
+smtpServer = 'smtp.strato.de'
+imapServer = 'imap.server.example'
+userName = 'someone@server.example'
 passwd = getpass.getpass('Enter password for ' + userName + ' at ' + imapServer + ': ')
 subfolder = 'Inbox'
 detach_dir ='/tmp/'
 
 pattern_uid = re.compile('\d+ \(UID (?P<uid>\d+)\)')
 
-def connect(pw):
+def connect_imap(pw):
     imapSession = imaplib.IMAP4_SSL(imapServer)
     result, accountDetails = imapSession.login(userName, pw)
     if result != 'OK':
@@ -36,15 +77,34 @@ def connect(pw):
     else:
         print 'Sucessfully logged in!'
         return imapSession
-
+        
+def connect_smtp(pw):
+    smtpSession = smtplib.SMTP_SSL(smtpServer)
+    result, accountDetails = smtpSession.login(userName, pw)
+    if result != 235:
+        print 'Not able to sign in!'
+        raise
+    else:
+        print 'Sucessfully logged in!'
+        return smtpSession
+        
 def parse_uid(data):
     match = pattern_uid.match(data)
     return match.group('uid')
+    
 
 #####################################################################
 #  Check if mail server and doremi are reachable before continuing  #
 #####################################################################
 
+
+if not run_command('status'):
+    print('waking up projector.')
+    run_command('wakeup')
+    projector_up = False
+else:
+    print('Projector is awake')
+    projector_up = True
 r = pyping.ping('192.168.1.129')
 
 if r.ret_code == 0:
@@ -67,7 +127,7 @@ if 'attachments' not in os.listdir(detach_dir):
     os.mkdir(detach_dir + 'attachments')
 
 # Connect to server
-imapSession = connect(passwd)
+imapSession = connect_imap(passwd)
 
 # Dive into inbox
 imapSession.select(subfolder)
@@ -144,6 +204,7 @@ for filename in os.listdir(detach_dir + 'attachments'):
             os.remove(file_path)
         except:
             print 'Could not remove ' + file_path
+            
 ingested_kdms = []
 
 if os.listdir(detach_dir + 'attachments') == []:
@@ -152,12 +213,13 @@ else:
     print ('I downloaded the following KDMs:')
     for nr, filename in enumerate(os.listdir(detach_dir + 'attachments')):
         print(str(nr) + ': '+ str(filename))
+    #print('Building up a database.')
     
     ftp = FTP('cranky')
-    ftp.login('ingest','password') # Not the real password 
+    ftp.login('ingest','ingest')
     serverdirectorypath='/'
     serverfilepath=serverdirectorypath
-
+    #ftp.cwd(serverdirectorypath)
     for filename in os.listdir(detach_dir + 'attachments'):
         file_path = detach_dir + 'attachments/' + filename
         try:
@@ -167,4 +229,24 @@ else:
             print('Could not ingest KDM' + filename)
         os.remove(file_path)
 
+print('All done. Sending confirmation mail.')
 print(ingested_kdms)
+if not projector_up:
+    print('putting projector to sleep.')
+    run_command('sleep')
+    
+
+message = """\
+Subject: New KDMs ingested
+
+I ingested the KDMs """ + str(ingested_kdms) + """\
+
+This message is sent from Python."""
+
+
+smtpSession = connect_smtp(passwd)
+
+sender_mail = 'someone@server.example'
+rec_mail = 'someone_else@server.example'
+
+smtpSession.sendmail(sender_mail,rec_mail,message)
